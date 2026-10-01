@@ -25,20 +25,53 @@ def random_user_agent():
 
 # -------------------- AnimePahe Class --------------------
 class AnimePahe:
+    BASE_URLS = [
+        "https://animepahe.ng",
+        "https://animepahe.ch",
+    ]
+
     def __init__(self):
-        self.base = "https://animepahe.com"
+        self.base = self.BASE_URLS[0]
         self.headers = {
             "User-Agent": random_user_agent(),
-            "Referer": "https://animepahe.com/",
+            "Referer": self.base + "/",
         }
         self.session = tls_client.Session(client_identifier="chrome_120")
 
     async def get(self, url: str):
-        """Run tls-client GET asynchronously"""
-        def _req():
-            r = self.session.get(url, headers=self.headers)
-            return r
-        return await asyncio.to_thread(_req)
+        """Run tls-client GET asynchronously, failing over between AnimePahe domains."""
+        if not url.startswith("https://animepahe."):
+            return await asyncio.to_thread(
+                lambda: self.session.get(url, headers=self.headers)
+            )
+
+        path = url[len(self.base):] if url.startswith(self.base) else "/"
+        last_response = None
+
+        for candidate_base in self.BASE_URLS:
+            candidate_url = candidate_base + path
+            try:
+                response = await asyncio.to_thread(
+                    lambda: self.session.get(
+                        candidate_url,
+                        headers={
+                            **self.headers,
+                            "Referer": candidate_base + "/",
+                        },
+                    )
+                )
+                last_response = response
+
+                if 200 <= response.status_code < 400:
+                    self.base = candidate_base
+                    self.headers["Referer"] = candidate_base + "/"
+                    return response
+            except Exception:
+                continue
+
+        if last_response is not None:
+            return last_response
+        raise RuntimeError("All AnimePahe domains failed")
 
     async def search(self, query: str):
         url = f"{self.base}/api?m=search&q={query}"
